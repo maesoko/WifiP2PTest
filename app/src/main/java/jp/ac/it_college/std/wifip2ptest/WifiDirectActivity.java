@@ -1,28 +1,38 @@
 package jp.ac.it_college.std.wifip2ptest;
 
 import android.app.Activity;
+import android.app.ProgressDialog;
 import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.NetworkInfo;
 import android.net.wifi.p2p.WifiP2pConfig;
 import android.net.wifi.p2p.WifiP2pDevice;
+import android.net.wifi.p2p.WifiP2pInfo;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.p2p.WifiP2pManager.PeerListListener;
 import android.net.wifi.p2p.WifiP2pManager.ChannelListener;
+import android.net.wifi.p2p.WifiP2pManager.ConnectionInfoListener;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
 import android.provider.Settings;
 import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.TextView;
 import android.widget.Toast;
+
+import java.io.IOException;
 
 import jp.ac.it_college.std.wifip2ptest.WiFiDirectBroadcastReceiver.OnReceiveListener;
 import jp.ac.it_college.std.wifip2ptest.DeviceListFragment.DeviceActionListener;
 
-public class WiFiDirectActivity extends Activity implements OnReceiveListener, DeviceActionListener, ChannelListener {
+public class WiFiDirectActivity extends Activity
+        implements OnReceiveListener, DeviceActionListener, ChannelListener, ConnectionInfoListener, Handler.Callback {
 
     private IntentFilter intentFilter;
     private WifiP2pManager manager;
@@ -30,16 +40,27 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
     private BroadcastReceiver receiver;
     private boolean isWifiP2pEnabled;
     private boolean retryChannel;
+    private ProgressDialog progressDialog;
+    private WifiP2pInfo info;
+    private WiFiChatFragment chatFragment;
+    private Handler handler = new Handler(this);
+
+    public static final int SERVER_PORT = 4545;
+    public static final int MESSAGE_READ = 0x400 + 1;
+    public static final int MY_HANDLE = 0x400 + 2;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        chatFragment = new WiFiChatFragment();
         if (savedInstanceState == null) {
             getFragmentManager().beginTransaction()
                     .add(R.id.fragment_list, new DeviceListFragment())
                     .add(R.id.fragment_detail, new DeviceDetailFragment())
+                    .add(R.id.fragment_container, chatFragment)
+                    .hide(chatFragment)
                     .commit();
         }
 
@@ -55,6 +76,8 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
 
         manager = (WifiP2pManager) getSystemService(Context.WIFI_P2P_SERVICE);
         channel = manager.initialize(this, getMainLooper(), null);
+
+
     }
 
     @Override
@@ -67,6 +90,7 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
     @Override
     protected void onPause() {
         super.onPause();
+        disconnect();
         unregisterReceiver(receiver);
     }
 
@@ -122,11 +146,18 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
                 .findFragmentById(R.id.fragment_list);
         DeviceDetailFragment fragmentDetails = (DeviceDetailFragment) getFragmentManager()
                 .findFragmentById(R.id.fragment_detail);
+        WiFiChatFragment chatFragment = (WiFiChatFragment) getFragmentManager()
+                .findFragmentById(R.id.fragment_container);
         if (fragmentList != null) {
             fragmentList.clearPeers();
         }
         if (fragmentDetails != null) {
             fragmentDetails.resetViews();
+        }
+        if (chatFragment != null) {
+            getFragmentManager().beginTransaction()
+                    .hide(chatFragment)
+                    .commit();
         }
     }
 
@@ -161,9 +192,9 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
                 .getParcelableExtra(WifiP2pManager.EXTRA_NETWORK_INFO);
 
         if (networkInfo.isConnected()) {
-            DeviceDetailFragment fragment = (DeviceDetailFragment) getFragmentManager()
-                    .findFragmentById(R.id.fragment_detail);
-            manager.requestConnectionInfo(channel, fragment);
+//            DeviceDetailFragment fragment = (DeviceDetailFragment) getFragmentManager()
+//                    .findFragmentById(R.id.fragment_detail);
+            manager.requestConnectionInfo(channel, this);
         } else {
             resetData();
         }
@@ -219,6 +250,20 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
 
     @Override
     public void connect(WifiP2pConfig config) {
+        if (progressDialog != null && progressDialog.isShowing()) {
+            progressDialog.dismiss();
+        }
+
+        DeviceDetailFragment fragment =
+                (DeviceDetailFragment) getFragmentManager().findFragmentById(R.id.fragment_detail);
+
+        progressDialog = ProgressDialog.show(this, "Press back to cancel",
+                "Connecting to :" + fragment.getDevice().deviceAddress, true, true, new DialogInterface.OnCancelListener() {
+                    @Override
+                    public void onCancel(DialogInterface dialog) {
+                        cancelDisconnect();
+                    }
+                });
 
         manager.connect(channel, config, new WifiP2pManager.ActionListener() {
             @Override
@@ -238,6 +283,7 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
         final DeviceDetailFragment fragment = (DeviceDetailFragment) getFragmentManager()
                 .findFragmentById(R.id.fragment_detail);
         fragment.resetViews();
+
         manager.removeGroup(channel, new WifiP2pManager.ActionListener() {
             @Override
             public void onSuccess() {
@@ -249,6 +295,13 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
                 fragment.getView().setVisibility(View.INVISIBLE);
             }
         });
+    }
+
+    @Override
+    public void showChat() {
+        getFragmentManager().beginTransaction()
+                .show(chatFragment)
+                .commit();
     }
 
     @Override
@@ -264,5 +317,60 @@ public class WiFiDirectActivity extends Activity implements OnReceiveListener, D
                     "Severe! Channel is probably lost premanently. Try Disable/Re-Enable P2P.",
                     Toast.LENGTH_LONG).show();
         }
+    }
+
+    @Override
+    public void onConnectionInfoAvailable(WifiP2pInfo info) {
+        Thread thread;
+        if (progressDialog != null && progressDialog.isShowing()) {
+            progressDialog.dismiss();
+        }
+        this.info = info;
+
+        DeviceDetailFragment fragment =
+                (DeviceDetailFragment) getFragmentManager().findFragmentById(R.id.fragment_detail);
+        fragment.getView().findViewById(R.id.btn_chat).setVisibility(View.VISIBLE);
+
+        // The owner IP is now known.
+        TextView view = (TextView) fragment.getView().findViewById(R.id.group_owner);
+        view.setText(getResources().getString(R.string.group_owner_text)
+                + ((info.isGroupOwner) ? getResources().getString(R.string.yes)
+                : getResources().getString(R.string.no)));
+
+        if (info.groupFormed && info.isGroupOwner) {
+            try {
+                thread = new GroupOwnerSocketHandler(getHandler());
+                thread.start();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else if (info.groupFormed) {
+            // The other device acts as the client. In this case, we enable the
+            thread = new ClientSocketHandler(getHandler(), info.groupOwnerAddress);
+            thread.start();
+        }
+    }
+
+    @Override
+    public boolean handleMessage(Message msg) {
+        switch (msg.what) {
+            case MESSAGE_READ:
+                byte[] readBuf = (byte[]) msg.obj;
+                // construct a string from the valid bytes in the buffer
+                String readMessage = new String(readBuf, 0, msg.arg1);
+                (chatFragment).pushMessage("Buddy: " + readMessage);
+                break;
+
+            case MY_HANDLE:
+                Object obj = msg.obj;
+                (chatFragment).setChatManager((ChatManager) obj);
+                break;
+
+        }
+        return true;
+    }
+
+    public Handler getHandler() {
+        return handler;
     }
 }

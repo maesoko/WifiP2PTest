@@ -149,6 +149,8 @@ public class DeviceListFragment extends ListFragment implements WifiP2pManager.P
         void connect(WifiP2pConfig config);
 
         void disconnect();
+
+        void showChat();
     }
 
 }
