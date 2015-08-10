@@ -32,7 +32,8 @@ import jp.ac.it_college.std.wifip2ptest.WiFiDirectBroadcastReceiver.OnReceiveLis
 import jp.ac.it_college.std.wifip2ptest.DeviceListFragment.DeviceActionListener;
 
 public class WiFiDirectActivity extends Activity
-        implements OnReceiveListener, DeviceActionListener, ChannelListener, ConnectionInfoListener, Handler.Callback {
+        implements OnReceiveListener, DeviceActionListener,
+        ChannelListener, ConnectionInfoListener, Handler.Callback {
 
     private IntentFilter intentFilter;
     private WifiP2pManager manager;
